@@ -55,8 +55,23 @@ SAMPLE_GAMES = [SAMPLE_GAME, SAMPLE_GAME_2]
 
 @pytest.fixture
 def ephemeral_chroma_client():
-    """Return an in-memory ChromaDB client that is reset each test."""
+    """Return an in-memory ChromaDB client (fresh per test)."""
     return chromadb.EphemeralClient()
+
+
+# ---------------------------------------------------------------------------
+# Sentence-transformer embedding manager — loaded once per test session
+# to avoid repeated network calls to HuggingFace hub.
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="session")
+def embedding_manager():
+    """Return a session-scoped EmbeddingManager using sentence-transformers."""
+    import os
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+    from src.embeddings import EmbeddingManager
+    return EmbeddingManager(backend="sentence-transformers")
 
 
 # ---------------------------------------------------------------------------

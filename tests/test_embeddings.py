@@ -1,46 +1,42 @@
 """Tests for EmbeddingManager."""
+import os
 import pytest
 import numpy as np
 from unittest.mock import patch, MagicMock
+
+# Prevent HuggingFace hub checks after first model download
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 
 class TestEmbeddingManager:
     """Tests for EmbeddingManager class."""
 
-    def test_encode_returns_list_of_floats(self):
+    def test_encode_returns_list_of_floats(self, embedding_manager):
         """encode() should return a list of floats (embedding vector)."""
-        from src.embeddings import EmbeddingManager
-        mgr = EmbeddingManager(backend="sentence-transformers")
-        result = mgr.encode("Elden Ring is an open world RPG")
+        result = embedding_manager.encode("Elden Ring is an open world RPG")
         assert isinstance(result, list)
         assert len(result) > 0
         assert all(isinstance(x, float) for x in result)
 
-    def test_encode_returns_384_dims_for_minilm(self):
+    def test_encode_returns_384_dims_for_minilm(self, embedding_manager):
         """all-MiniLM-L6-v2 produces 384-dimensional vectors."""
-        from src.embeddings import EmbeddingManager
-        mgr = EmbeddingManager(backend="sentence-transformers")
-        result = mgr.encode("test sentence")
+        result = embedding_manager.encode("test sentence")
         assert len(result) == 384
 
-    def test_encode_batch_returns_list_of_vectors(self):
+    def test_encode_batch_returns_list_of_vectors(self, embedding_manager):
         """encode_batch() should return a list of embedding vectors."""
-        from src.embeddings import EmbeddingManager
-        mgr = EmbeddingManager(backend="sentence-transformers")
         texts = ["Elden Ring", "Hollow Knight", "Stardew Valley"]
-        results = mgr.encode_batch(texts)
+        results = embedding_manager.encode_batch(texts)
         assert isinstance(results, list)
         assert len(results) == 3
         assert all(len(v) == 384 for v in results)
 
-    def test_similar_texts_have_higher_cosine_similarity(self):
+    def test_similar_texts_have_higher_cosine_similarity(self, embedding_manager):
         """Semantically similar texts should have cosine similarity > dissimilar ones."""
-        from src.embeddings import EmbeddingManager
-        mgr = EmbeddingManager(backend="sentence-transformers")
-
-        v1 = np.array(mgr.encode("action RPG game with open world"))
-        v2 = np.array(mgr.encode("open world role playing adventure"))
-        v3 = np.array(mgr.encode("cooking pasta recipe in the kitchen"))
+        v1 = np.array(embedding_manager.encode("action RPG game with open world"))
+        v2 = np.array(embedding_manager.encode("open world role playing adventure"))
+        v3 = np.array(embedding_manager.encode("cooking pasta recipe in the kitchen"))
 
         sim_similar = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2))
         sim_dissimilar = np.dot(v1, v3) / (np.linalg.norm(v1) * np.linalg.norm(v3))
@@ -68,8 +64,6 @@ class TestEmbeddingManager:
         assert len(result) == 1536
         assert result[0] == pytest.approx(0.1)
 
-    def test_dimension_property(self):
+    def test_dimension_property(self, embedding_manager):
         """dimension property should return vector size."""
-        from src.embeddings import EmbeddingManager
-        mgr = EmbeddingManager(backend="sentence-transformers")
-        assert mgr.dimension == 384
+        assert embedding_manager.dimension == 384
