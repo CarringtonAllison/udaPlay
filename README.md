@@ -29,6 +29,7 @@ udaPlay/
 │   │   └── vector_db.py      # VectorStore + VectorStoreManager (ChromaDB)
 │   ├── Udaplay_01_solution_project.ipynb   # Part 1: RAG pipeline
 │   └── Udaplay_02_solution_project.ipynb   # Part 2: Agent implementation
+├── chroma_db/                # Persistent ChromaDB vector store (created on first run)
 ├── tests/                    # 81 pytest tests (all mocked, no real API calls)
 ├── requirements.txt
 └── .env.example
@@ -81,11 +82,15 @@ Agent (gpt-4o-mini)
     │
     ├── retrieve_game() ──► ChromaDB semantic search
     │       │
-    │       └── result returned to agent
-    │
+    │       ▼
+    ├── evaluate_retrieval() ──► similarity threshold (≥ 0.70)
+    │       │
+    │       ├── relevant ──► Final Answer
+    │       │
+    │       └── not_relevant
+    │               │
+    │               ▼
     └── game_web_search() ──► Tavily web search (fallback)
-            │
-            └── result returned to agent
                     │
                     ▼
                 Final Answer
@@ -126,7 +131,7 @@ All 81 tests run without real API calls — OpenAI and Tavily clients are fully 
 |---|---|
 | LLM | OpenAI (`gpt-4o-mini`) |
 | Embeddings | OpenAI `text-embedding-3-small` via ChromaDB |
-| Vector database | ChromaDB (in-memory) |
+| Vector database | ChromaDB (persistent, `./chroma_db`) |
 | Web search | Tavily |
 | State machine | Custom (`lib/state_machine.py`) |
 | Testing | pytest |

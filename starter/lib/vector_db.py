@@ -61,8 +61,9 @@ class VectorStore:
 class VectorStoreManager:
     """Factory and lifecycle manager for ChromaDB vector stores."""
 
-    def __init__(self, openai_api_key: str):
-        self.chroma_client = chromadb.Client()
+    def __init__(self, openai_api_key: str, chroma_path: str = "./chroma_db"):
+        self.chroma_client = chromadb.PersistentClient(path=chroma_path)
+        self.chroma_path = chroma_path
         self.embedding_function = self._create_embedding_function(openai_api_key)
 
     def _create_embedding_function(self, api_key: str) -> EmbeddingFunction:
@@ -72,7 +73,7 @@ class VectorStoreManager:
         return embeddings_fn
 
     def __repr__(self):
-        return f"VectorStoreManager():{self.chroma_client}"
+        return f"VectorStoreManager(path={self.chroma_path}):{self.chroma_client}"
 
     def get_store(self, name: str) -> Optional[VectorStore]:
         try:
