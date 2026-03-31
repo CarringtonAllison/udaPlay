@@ -1,95 +1,64 @@
 """Shared pytest fixtures for UdaPlay test suite."""
+import sys
+import os
 import pytest
 from unittest.mock import MagicMock, patch
-import chromadb
+
+# Add starter/ to path so `lib` imports work (lib lives at starter/lib/)
+STARTER_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'starter'))
+if STARTER_DIR not in sys.path:
+    sys.path.insert(0, STARTER_DIR)
 
 
 # ---------------------------------------------------------------------------
-# Sample game data
+# Sample game data (matches course schema)
 # ---------------------------------------------------------------------------
 
 SAMPLE_GAME = {
-    "game_id": "elden-ring",
-    "title": "Elden Ring",
-    "developer": "FromSoftware",
-    "publisher": "Bandai Namco Entertainment",
-    "release_date": "2022-02-25",
-    "platforms": ["PlayStation 5", "PC", "Xbox Series X/S"],
-    "genre": ["Action RPG", "Open World"],
-    "description": (
-        "Elden Ring is an open-world action RPG developed by FromSoftware "
-        "in collaboration with author George R.R. Martin. Players explore the "
-        "Lands Between seeking to become Elden Lord."
-    ),
-    "metacritic_score": 96,
-    "esrb_rating": "M",
-    "notable_features": ["Open world", "George R.R. Martin lore"],
-    "source": "internal",
+    "Name": "Gran Turismo",
+    "Platform": "PlayStation 1",
+    "Genre": "Racing",
+    "Publisher": "Sony Computer Entertainment",
+    "Description": "A realistic racing simulator featuring a wide array of cars and tracks.",
+    "YearOfRelease": 1997,
 }
 
 SAMPLE_GAME_2 = {
-    "game_id": "hollow-knight",
-    "title": "Hollow Knight",
-    "developer": "Team Cherry",
-    "publisher": "Team Cherry",
-    "release_date": "2017-02-24",
-    "platforms": ["PC", "Nintendo Switch", "PlayStation 4"],
-    "genre": ["Metroidvania", "Action-Platformer"],
-    "description": (
-        "Hollow Knight is a hand-drawn Metroidvania set in a vast underground "
-        "insect kingdom called Hallownest. Players control the Knight exploring "
-        "interconnected caverns and battling challenging bosses."
-    ),
-    "metacritic_score": 87,
-    "esrb_rating": "E10+",
-    "notable_features": ["Hand-drawn art", "Challenging boss fights"],
-    "source": "internal",
+    "Name": "Super Mario 64",
+    "Platform": "Nintendo 64",
+    "Genre": "Platformer",
+    "Publisher": "Nintendo",
+    "Description": "A groundbreaking 3D platformer that set new standards for the genre.",
+    "YearOfRelease": 1996,
 }
 
 SAMPLE_GAMES = [SAMPLE_GAME, SAMPLE_GAME_2]
 
 
 # ---------------------------------------------------------------------------
-# ChromaDB — ephemeral (in-memory) client, no disk I/O in tests
+# Mock OpenAI client
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
-def ephemeral_chroma_client():
-    """Return an in-memory ChromaDB client (fresh per test)."""
-    return chromadb.EphemeralClient()
-
-
-# ---------------------------------------------------------------------------
-# Sentence-transformer embedding manager — loaded once per test session
-# to avoid repeated network calls to HuggingFace hub.
-# ---------------------------------------------------------------------------
-
-@pytest.fixture(scope="session")
-def embedding_manager():
-    """Return a session-scoped EmbeddingManager using sentence-transformers."""
-    import os
-    os.environ.setdefault("HF_HUB_OFFLINE", "1")
-    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
-    from src.embeddings import EmbeddingManager
-    return EmbeddingManager(backend="sentence-transformers")
-
-
-# ---------------------------------------------------------------------------
-# Mock Anthropic client
-# ---------------------------------------------------------------------------
-
-@pytest.fixture
-def mock_anthropic_client():
-    """Return a MagicMock that mimics the anthropic.Anthropic() interface."""
+def mock_openai_client():
+    """Return a MagicMock that mimics the openai.OpenAI() interface."""
     client = MagicMock()
-    # Default: messages.create returns a text block
+
+    # Default: chat.completions.create returns a simple text response
+    mock_response = MagicMock()
+    mock_choice = MagicMock()
     mock_message = MagicMock()
-    mock_content_block = MagicMock()
-    mock_content_block.type = "text"
-    mock_content_block.text = '{"confidence": 0.9, "reason": "Strong match found.", "relevant_ids": ["elden-ring"]}'
-    mock_message.content = [mock_content_block]
-    mock_message.stop_reason = "end_turn"
-    client.messages.create.return_value = mock_message
+    mock_message.content = "Gran Turismo was published by Sony Computer Entertainment."
+    mock_message.tool_calls = None
+    mock_choice.message = mock_message
+    mock_response.choices = [mock_choice]
+    mock_response.usage = MagicMock(
+        prompt_tokens=100,
+        completion_tokens=50,
+        total_tokens=150
+    )
+    client.chat.completions.create.return_value = mock_response
+    client.beta.chat.completions.parse.return_value = mock_response
     return client
 
 
@@ -104,21 +73,10 @@ def mock_tavily_client():
     client.search.return_value = {
         "results": [
             {
-                "title": "Elden Ring - Wikipedia",
-                "url": "https://en.wikipedia.org/wiki/Elden_Ring",
-                "content": (
-                    "Elden Ring is a 2022 action RPG developed by FromSoftware "
-                    "and published by Bandai Namco. It was released on February 25, 2022."
-                ),
-                "score": 0.92,
-                "raw_content": None,
-            },
-            {
-                "title": "Elden Ring Review - IGN",
-                "url": "https://www.ign.com/articles/elden-ring-review",
-                "content": "An extraordinary achievement in open-world design. Score: 10/10.",
-                "score": 0.85,
-                "raw_content": None,
+                "title": "Top Games 2025",
+                "url": "https://example.com/games-2025",
+                "content": "The most anticipated games of 2025 include GTA VI and many others.",
+                "score": 0.88,
             },
         ]
     }
@@ -126,16 +84,12 @@ def mock_tavily_client():
 
 
 # ---------------------------------------------------------------------------
-# Schema validation helper (available in all tests via import)
+# Schema validation helper
 # ---------------------------------------------------------------------------
 
-REQUIRED_GAME_FIELDS = {
-    "game_id", "title", "developer", "publisher", "release_date",
-    "platforms", "genre", "description", "metacritic_score",
-    "esrb_rating", "notable_features", "source",
-}
+REQUIRED_GAME_FIELDS = {"Name", "Platform", "Genre", "Publisher", "Description", "YearOfRelease"}
 
 
 def validate_game_schema(game: dict) -> bool:
-    """Return True if game dict contains all required fields with non-None values."""
+    """Return True if game dict contains all required fields."""
     return all(field in game and game[field] is not None for field in REQUIRED_GAME_FIELDS)

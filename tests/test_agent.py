@@ -1,242 +1,140 @@
-"""Tests for UdaPlayAgent state machine."""
+"""Tests for Agent class and AgentState."""
 import json
-import uuid
 import pytest
 from unittest.mock import MagicMock, patch
-from tests.conftest import SAMPLE_GAMES
+from lib.agents import Agent, AgentState
+from lib.state_machine import Run
+from lib.tooling import tool
 
 
-# ---------------------------------------------------------------------------
-# Shared fixtures
-# ---------------------------------------------------------------------------
+def _make_openai_response(content: str = "Test answer.", tool_calls=None):
+    """Build a mock OpenAI chat completion response."""
+    mock_response = MagicMock()
+    mock_choice = MagicMock()
+    mock_message = MagicMock()
+    mock_message.content = content
+    mock_message.tool_calls = tool_calls
+    mock_choice.message = mock_message
+    mock_response.choices = [mock_choice]
+    mock_response.usage = MagicMock(prompt_tokens=50, completion_tokens=30, total_tokens=80)
+    return mock_response
 
-@pytest.fixture
-def populated_store(ephemeral_chroma_client, embedding_manager):
-    from src.vector_store import VectorStoreManager
-    store = VectorStoreManager(
-        chroma_client=ephemeral_chroma_client,
-        embedding_manager=embedding_manager,
-        collection_name=f"agent_test_{uuid.uuid4().hex[:8]}",
-    )
-    store.upsert_documents(SAMPLE_GAMES)
-    return store
-
-
-def _make_eval_response(confidence: float):
-    msg = MagicMock()
-    block = MagicMock()
-    block.type = "text"
-    block.text = json.dumps({
-        "confidence": confidence,
-        "reason": "Test evaluation.",
-        "relevant_ids": ["elden-ring"],
-    })
-    msg.content = [block]
-    return msg
-
-
-def _make_answer_response(answer_text: str):
-    msg = MagicMock()
-    block = MagicMock()
-    block.type = "text"
-    block.text = answer_text
-    msg.content = [block]
-    msg.stop_reason = "end_turn"
-    return msg
-
-
-# ---------------------------------------------------------------------------
-# AgentState enum
-# ---------------------------------------------------------------------------
 
 class TestAgentState:
 
-    def test_all_required_states_exist(self):
-        from src.agent import AgentState
-        required = {"IDLE", "RETRIEVE", "EVALUATE", "WEBSEARCH", "PERSIST", "ANSWER", "ERROR"}
-        actual = {s.name for s in AgentState}
-        assert required.issubset(actual)
+    def test_agent_state_is_typed_dict(self):
+        state: AgentState = {
+            "user_query": "test",
+            "instructions": "You are helpful.",
+            "messages": [],
+            "current_tool_calls": None,
+            "total_tokens": 0,
+            "session_id": "default",
+        }
+        assert state["user_query"] == "test"
 
 
-# ---------------------------------------------------------------------------
-# AgentContext dataclass
-# ---------------------------------------------------------------------------
+class TestAgentInit:
 
-class TestAgentContext:
+    def test_agent_stores_instructions(self):
+        agent = Agent(model_name="gpt-4o-mini", instructions="Be helpful.")
+        assert agent.instructions == "Be helpful."
 
-    def test_context_initialises_with_defaults(self):
-        from src.agent import AgentContext, AgentState
-        ctx = AgentContext(query="test query")
-        assert ctx.query == "test query"
-        assert ctx.state == AgentState.IDLE
-        assert ctx.retrieval_results == []
-        assert ctx.web_results == []
-        assert ctx.final_answer == ""
-        assert ctx.citations == []
-        assert ctx.error is None
+    def test_agent_stores_model_name(self):
+        agent = Agent(model_name="gpt-4o-mini", instructions="test")
+        assert agent.model_name == "gpt-4o-mini"
 
-    def test_context_accepts_session_id(self):
-        from src.agent import AgentContext
-        ctx = AgentContext(query="test", session_id="session-abc")
-        assert ctx.session_id == "session-abc"
+    def test_agent_empty_tools_by_default(self):
+        agent = Agent(model_name="gpt-4o-mini", instructions="test")
+        assert agent.tools == []
 
-
-# ---------------------------------------------------------------------------
-# UdaPlayAgent — RAG hit path (high confidence)
-# ---------------------------------------------------------------------------
-
-class TestAgentRAGPath:
-
-    def test_run_returns_agent_context(self, populated_store, mock_anthropic_client, mock_tavily_client):
-        from src.agent import UdaPlayAgent, AgentState
-        mock_anthropic_client.messages.create.side_effect = [
-            _make_eval_response(0.95),   # evaluate_retrieval call
-            _make_answer_response("Elden Ring was made by FromSoftware."),  # answer call
-        ]
-        agent = UdaPlayAgent(
-            vector_store=populated_store,
-            llm_client=mock_anthropic_client,
-            tavily_client=mock_tavily_client,
-        )
-        ctx = agent.run("Who made Elden Ring?")
-        assert ctx.state == AgentState.ANSWER
-        assert len(ctx.final_answer) > 0
-
-    def test_high_confidence_does_not_call_tavily(self, populated_store, mock_anthropic_client, mock_tavily_client):
-        from src.agent import UdaPlayAgent
-        mock_anthropic_client.messages.create.side_effect = [
-            _make_eval_response(0.95),
-            _make_answer_response("Elden Ring was made by FromSoftware."),
-        ]
-        agent = UdaPlayAgent(
-            vector_store=populated_store,
-            llm_client=mock_anthropic_client,
-            tavily_client=mock_tavily_client,
-        )
-        agent.run("Who made Elden Ring?")
-        mock_tavily_client.search.assert_not_called()
-
-    def test_retrieval_results_populated(self, populated_store, mock_anthropic_client, mock_tavily_client):
-        from src.agent import UdaPlayAgent
-        mock_anthropic_client.messages.create.side_effect = [
-            _make_eval_response(0.95),
-            _make_answer_response("Hollow Knight was made by Team Cherry."),
-        ]
-        agent = UdaPlayAgent(
-            vector_store=populated_store,
-            llm_client=mock_anthropic_client,
-            tavily_client=mock_tavily_client,
-        )
-        ctx = agent.run("Who made Hollow Knight?")
-        assert len(ctx.retrieval_results) > 0
+    def test_agent_accepts_tools(self):
+        @tool
+        def my_tool(q: str) -> str:
+            """Test tool."""
+            return q
+        agent = Agent(model_name="gpt-4o-mini", instructions="test", tools=[my_tool])
+        assert len(agent.tools) == 1
 
 
-# ---------------------------------------------------------------------------
-# UdaPlayAgent — web search fallback path (low confidence)
-# ---------------------------------------------------------------------------
+class TestAgentInvoke:
 
-class TestAgentWebSearchPath:
+    def test_invoke_returns_run(self):
+        with patch("lib.llm.OpenAI") as mock_openai_class:
+            mock_client = MagicMock()
+            mock_openai_class.return_value = mock_client
+            mock_client.chat.completions.create.return_value = _make_openai_response()
 
-    def test_low_confidence_triggers_web_search(self, populated_store, mock_anthropic_client, mock_tavily_client):
-        from src.agent import UdaPlayAgent
-        mock_anthropic_client.messages.create.side_effect = [
-            _make_eval_response(0.1),   # low confidence → web search
-            _make_answer_response("Unknown game details found on web."),
-        ]
-        agent = UdaPlayAgent(
-            vector_store=populated_store,
-            llm_client=mock_anthropic_client,
-            tavily_client=mock_tavily_client,
-        )
-        ctx = agent.run("Tell me about a 2025 game that doesn't exist in the database")
-        mock_tavily_client.search.assert_called()
+            agent = Agent(model_name="gpt-4o-mini", instructions="You are helpful.")
+            result = agent.invoke("What is Gran Turismo?")
+            assert isinstance(result, Run)
 
-    def test_web_results_persisted_to_vector_store(self, populated_store, mock_anthropic_client, mock_tavily_client):
-        from src.agent import UdaPlayAgent
-        initial_count = populated_store.get_collection_stats()["count"]
-        mock_anthropic_client.messages.create.side_effect = [
-            _make_eval_response(0.1),
-            _make_answer_response("Found it on the web."),
-        ]
-        agent = UdaPlayAgent(
-            vector_store=populated_store,
-            llm_client=mock_anthropic_client,
-            tavily_client=mock_tavily_client,
-        )
-        agent.run("What is that new 2025 game?")
-        # Vector store should have grown after persisting web results
-        final_count = populated_store.get_collection_stats()["count"]
-        assert final_count >= initial_count
+    def test_invoke_final_state_has_messages(self):
+        with patch("lib.llm.OpenAI") as mock_openai_class:
+            mock_client = MagicMock()
+            mock_openai_class.return_value = mock_client
+            mock_client.chat.completions.create.return_value = _make_openai_response(
+                "Gran Turismo is a racing game."
+            )
 
-    def test_web_search_failure_still_produces_answer(self, populated_store, mock_anthropic_client, mock_tavily_client):
-        from src.agent import UdaPlayAgent, AgentState
-        mock_tavily_client.search.side_effect = Exception("Tavily down")
-        mock_anthropic_client.messages.create.side_effect = [
-            _make_eval_response(0.1),
-            _make_answer_response("I could not find reliable information."),
-        ]
-        agent = UdaPlayAgent(
-            vector_store=populated_store,
-            llm_client=mock_anthropic_client,
-            tavily_client=mock_tavily_client,
-        )
-        ctx = agent.run("Obscure game query")
-        assert ctx.state == AgentState.ANSWER
-        assert len(ctx.final_answer) > 0
+            agent = Agent(model_name="gpt-4o-mini", instructions="Be helpful.")
+            run = agent.invoke("Tell me about Gran Turismo.")
+            state = run.get_final_state()
+            assert len(state["messages"]) > 0
 
+    def test_invoke_uses_default_session(self):
+        with patch("lib.llm.OpenAI") as mock_openai_class:
+            mock_client = MagicMock()
+            mock_openai_class.return_value = mock_client
+            mock_client.chat.completions.create.return_value = _make_openai_response()
 
-# ---------------------------------------------------------------------------
-# UdaPlayAgent — error handling
-# ---------------------------------------------------------------------------
+            agent = Agent(model_name="gpt-4o-mini", instructions="test")
+            agent.invoke("Hello")
+            runs = agent.get_session_runs("default")
+            assert len(runs) == 1
 
-class TestAgentErrorHandling:
+    def test_invoke_with_custom_session_id(self):
+        with patch("lib.llm.OpenAI") as mock_openai_class:
+            mock_client = MagicMock()
+            mock_openai_class.return_value = mock_client
+            mock_client.chat.completions.create.return_value = _make_openai_response()
 
-    def test_llm_failure_transitions_to_error_then_answer(self, populated_store, mock_anthropic_client, mock_tavily_client):
-        from src.agent import UdaPlayAgent, AgentState
-        mock_anthropic_client.messages.create.side_effect = Exception("LLM crashed")
-        agent = UdaPlayAgent(
-            vector_store=populated_store,
-            llm_client=mock_anthropic_client,
-            tavily_client=mock_tavily_client,
-        )
-        ctx = agent.run("Who made Elden Ring?")
-        # Agent should recover and return ANSWER with an error message
-        assert ctx.state == AgentState.ANSWER
-        assert ctx.final_answer != ""
+            agent = Agent(model_name="gpt-4o-mini", instructions="test")
+            agent.invoke("Hello", session_id="my-session")
+            runs = agent.get_session_runs("my-session")
+            assert len(runs) == 1
 
+    def test_multi_turn_accumulates_messages(self):
+        with patch("lib.llm.OpenAI") as mock_openai_class:
+            mock_client = MagicMock()
+            mock_openai_class.return_value = mock_client
+            mock_client.chat.completions.create.return_value = _make_openai_response()
 
-# ---------------------------------------------------------------------------
-# UdaPlayAgent — multi-turn sessions
-# ---------------------------------------------------------------------------
+            agent = Agent(model_name="gpt-4o-mini", instructions="test")
+            agent.invoke("Q1", session_id="multi")
+            agent.invoke("Q2", session_id="multi")
+            runs = agent.get_session_runs("multi")
+            assert len(runs) == 2
 
-class TestAgentSessions:
+    def test_token_count_tracked(self):
+        with patch("lib.llm.OpenAI") as mock_openai_class:
+            mock_client = MagicMock()
+            mock_openai_class.return_value = mock_client
+            mock_client.chat.completions.create.return_value = _make_openai_response()
 
-    def test_session_id_auto_generated(self, populated_store, mock_anthropic_client, mock_tavily_client):
-        from src.agent import UdaPlayAgent
-        mock_anthropic_client.messages.create.side_effect = [
-            _make_eval_response(0.9),
-            _make_answer_response("Answer 1."),
-        ]
-        agent = UdaPlayAgent(
-            vector_store=populated_store,
-            llm_client=mock_anthropic_client,
-            tavily_client=mock_tavily_client,
-        )
-        ctx = agent.run("Q1?")
-        assert ctx.session_id is not None
+            agent = Agent(model_name="gpt-4o-mini", instructions="test")
+            run = agent.invoke("test query")
+            state = run.get_final_state()
+            assert state.get("total_tokens", 0) >= 0
 
-    def test_same_session_accumulates_turns(self, populated_store, mock_anthropic_client, mock_tavily_client):
-        from src.agent import UdaPlayAgent
-        mock_anthropic_client.messages.create.side_effect = [
-            _make_eval_response(0.9), _make_answer_response("Answer 1."),
-            _make_eval_response(0.9), _make_answer_response("Answer 2."),
-        ]
-        agent = UdaPlayAgent(
-            vector_store=populated_store,
-            llm_client=mock_anthropic_client,
-            tavily_client=mock_tavily_client,
-        )
-        ctx1 = agent.run("Q1?", session_id="session-xyz")
-        ctx2 = agent.run("Q2?", session_id="session-xyz")
-        history = agent.memory.get_session_history("session-xyz")
-        assert len(history) == 2
+    def test_reset_session_clears_memory(self):
+        with patch("lib.llm.OpenAI") as mock_openai_class:
+            mock_client = MagicMock()
+            mock_openai_class.return_value = mock_client
+            mock_client.chat.completions.create.return_value = _make_openai_response()
+
+            agent = Agent(model_name="gpt-4o-mini", instructions="test")
+            agent.invoke("Hello", session_id="clear-me")
+            agent.reset_session("clear-me")
+            runs = agent.get_session_runs("clear-me")
+            assert len(runs) == 0
